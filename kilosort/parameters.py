@@ -454,6 +454,18 @@ EXTRA_PARAMETERS = {
             """
     },
 
+    'correlogram_shape_criterion': {
+        'gui_name': 'correlogram_shape_criterion',
+        'type': bool,
+        'min': None, 'max': None,
+        'exclude': [],
+        'default': False,           # OFF by default (no behavior change)
+        'step': 'clustering',
+        'description': """
+            If True, require candidate merges to have ACG(s) with a similar
+            near-zero-lag shape to the CCG (KS2.5-style criterion).
+        """
+    },
 
     ### POSTPROCESSING
     'duplicate_spike_ms': {
@@ -533,3 +545,57 @@ def compare_settings(settings):
         else:
             extra_keys.append(k)
     return modified_settings, extra_keys
+
+
+def get_preset(name):
+    """Helper function that defines named parameter sets.
+    """
+
+    settings = dict()
+
+    if name == "original":
+        # This returns the unmodified base KS4 settings
+        pass
+    elif name == "standard":
+        # Custom preset intended to give a finer resolution of 
+        # clustering, similar to Rich's customized version of KS2.5.
+
+        # Here we disable the 'merging tree' algorithm, which normallly
+        # merges pairs of units whose joint spike features are *not* clearly 
+        # separated (bimodally distributed) on the regression axis. We
+        # set the threshold for the bimodality score to zero, which causes
+        # the algorithm to reject all possible merges.
+        #
+        # This seems appropriate to do, if we assume that the raw clustering
+        # output already has the correct level of granularity. The KS4 
+        # paper states that the initial clusters are 'over-split' (which 
+        # would warrant the subsequent merging steps). However, if the 
+        # neural activity is very dense (e.g. MEC), we may want to skip the
+        # merging completely.
+        # 
+        # We may indeed miss some necessary merges by making this 
+        # modification; however the subsequent global merging step should
+        # detect these, informed by a refractory CCG.  
+        settings['merge_bimodality_threshold'] = 0 # no merges
+
+        # Here we enable a new rule that should reduce the 'global' merging 
+        # algorithm's likelihood of identifying false-positive 'refractory'
+        # cross-correlograms that are actually due to anti-phase tuning
+        # relationships (commonly observed with grid and HD cells).
+        settings['correlogram_shape_criterion'] = True
+
+        # Here we increase the minimum template-correlation value that
+        # defines how similar two templates must be for them to be merged.
+        # This parameter only applies to the first clustering stage.
+        #
+        # This change means that only *very* similar templates will be 
+        # merged. This should help with allowing templates to separate 
+        # the densely
+        #
+        # (We don't modify the threshold for the second clustering stage,
+        # because the merging rule is informed by the CCG and is therefore
+        # more stringent)
+        settings['merge_correlation_threshold_1'] = 0.975
+    else:
+        raise ValueError("{} is not a valid preset name".format(name))
+    return settings

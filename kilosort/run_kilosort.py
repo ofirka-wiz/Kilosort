@@ -209,6 +209,7 @@ def _sort(filename, results_dir, probe, settings, data_dtype, device, do_CAR,
     """
 
     try:
+        logger.info(f"Settings {settings}")
         logger.info(f"Kilosort version {kilosort.__version__}")
         logger.info(f"Python version {platform.python_version()}")
         logger.info('-'*40)
@@ -814,6 +815,7 @@ def detect_spikes(ops, device, bfile, tic0=np.nan, progress_bar=None,
         ops, st0, tF, mode='spikes', device=device, progress_bar=progress_bar,
         clear_cache=clear_cache, verbose=verbose
         )
+     # postprocess_templates() in turn calls merging_function() 
     Wall3 = template_matching.postprocess_templates(
         Wall, ops, clu, st0, tF, device=device
         )
@@ -826,6 +828,7 @@ def detect_spikes(ops, device, bfile, tic0=np.nan, progress_bar=None,
         ops['cuda_clu0'] = torch.cuda.memory_stats(device)
     logger.info(f'{clu.max()+1} clusters found, in {elapsed:.2f}s; ' +
                 f'total {total:.2f}s')
+    logger.info(f'{Wall3.shape[0]} templates after merging clusters')
     logger.debug(f'clu shape: {clu.shape}')
     logger.debug(f'Wall shape: {Wall.shape}')
     log_performance(logger, 'info', 'Resource usage after first clustering',
