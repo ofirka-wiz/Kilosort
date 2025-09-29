@@ -8,6 +8,9 @@ from tqdm import tqdm
 from kilosort import CCG
 from kilosort.utils import log_performance
 
+from pathlib import Path
+import csv
+
 logger = logging.getLogger(__name__)
 
 
@@ -251,6 +254,7 @@ def merging_function(ops, Wall, clu, st, tF, r_thresh=0.5, mode='ccg', check_dt=
 
     Ww = Wall.to(device)
     NN = len(Ww)
+    parent = np.arange(NN, dtype=np.int32)  # track where each original id ends up
 
     isort = np.argsort(ns)[::-1]
 
@@ -260,6 +264,9 @@ def merging_function(ops, Wall, clu, st, tF, r_thresh=0.5, mode='ccg', check_dt=
     acg_threshold = ops['settings']['acg_threshold']
     ccg_threshold = ops['settings']['ccg_threshold']
     use_shape_criterion = ops['settings']['correlogram_shape_criterion']
+
+    # collect pairs that do not merge ONLY by the shape criterion
+    shape_only_nonmerges = []
 
     if mode == 'ccg':
         is_ref, est_contam_rate = CCG.refract(clu, st[:,0]/ops['fs'],
@@ -315,6 +322,26 @@ def merging_function(ops, Wall, clu, st, tF, r_thresh=0.5, mode='ccg', check_dt=
                                         ccg_threshold=ccg_threshold,
                                         use_shape_criterion=use_shape_criterion
                                     )
+                
+                 # If non-merge AND the shape rule is enabled, re-check baseline (no shape)
+                if (not is_ccg) and use_shape_criterion:
+                    _, base_is_ccg, r12_base = CCG.check_CCG(
+                        st0, st1,
+                        acg_threshold=acg_threshold,
+                        ccg_threshold=ccg_threshold,
+                        use_shape_criterion=False
+                    )
+                    if base_is_ccg:
+                        # Log minimal info; expand if you want more fields later
+                        shape_only_nonmerges.append({
+                            'unit_a': int(kk),
+                            'unit_b': int(jj),
+                            'template_corr': float(cmax[jj].item()),
+                            'r12_base': float(r12_base),
+                            'n_a': int(ns[kk]),
+                            'n_b': int(ns[jj]),
+                        })
+
     
             else:
                 dmu = 2 * (mu[kk] - mu[jj]) / (mu[kk] + mu[jj])
@@ -335,7 +362,8 @@ def merging_function(ops, Wall, clu, st, tF, r_thresh=0.5, mode='ccg', check_dt=
                 Ww[jj] = 0
                 ns[kk] += ns[jj]
                 ns[jj] = 0
-                clu2[clu2==jj] = kk            
+                clu2[clu2==jj] = kk 
+                parent[parent == jj] = kk  # jj now points to kk           
 
                 break
 
@@ -345,6 +373,9 @@ def merging_function(ops, Wall, clu, st, tF, r_thresh=0.5, mode='ccg', check_dt=
             nmerge+=1
     
     imap = np.cumsum((~is_merged).astype('int32')) - 1
+
+    final_id_by_orig = imap[parent]  # maps original ids -> final exported ids
+    
     if imap.size > 0:
         # Otherwise, everything has been merged into a single cluster
         clu2 = imap[clu2]
@@ -361,6 +392,33 @@ def merging_function(ops, Wall, clu, st, tF, r_thresh=0.5, mode='ccg', check_dt=
     clu2 = clu2[sorted_idx]
     tensor_idx = torch.from_numpy(sorted_idx)
     tF = tF[tensor_idx]
+
+
+    if shape_only_nonmerges:
+        # add final ids to each logged row
+        for row in shape_only_nonmerges:
+            row['final_a'] = int(final_id_by_orig[row['unit_a']])
+            row['final_b'] = int(final_id_by_orig[row['unit_b']])
+
+        base_dir = Path(ops['settings'].get('results_dir', ops['data_dir']))
+        logs_dir = base_dir / 'logs'
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        out_csv = logs_dir / 'shape_only_nonmerges.csv'
+
+        write_header = not out_csv.exists()
+        with out_csv.open('a', newline='') as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    'unit_a','unit_b',        # ids at decision time
+                    'final_a','final_b',      # ids in exported results
+                    'template_corr','r12_base','n_a','n_b'
+                ]
+            )
+            if write_header:
+                writer.writeheader()
+            writer.writerows(shape_only_nonmerges)
+
 
     return Ww.cpu(), clu2, is_ref, st, tF
 
